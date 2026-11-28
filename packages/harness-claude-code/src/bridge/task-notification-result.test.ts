@@ -19,40 +19,48 @@ const state = vi.hoisted(() => ({
   originalArgv: [] as string[],
 }));
 
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
-  query: (args: QueryArgs) =>
-    (async function* () {
-      try {
-        const input = args.prompt[Symbol.asyncIterator]();
-        const initial = await input.next();
-        const promptUuid = Reflect.get(
-          initial.value as object,
-          'uuid',
-        ) as string;
-        if (state.steering) await input.next();
+vi.mock('@anthropic-ai/claude-agent-sdk', async importOriginal => {
+  const actual = await importOriginal<{
+    BUILTIN_TOOL_NAMES: readonly string[];
+    LEGACY_TOOL_NAME_ALIASES: Readonly<Record<string, string>>;
+  }>();
+  return {
+    BUILTIN_TOOL_NAMES: actual.BUILTIN_TOOL_NAMES,
+    LEGACY_TOOL_NAME_ALIASES: actual.LEGACY_TOOL_NAME_ALIASES,
+    query: (args: QueryArgs) =>
+      (async function* () {
+        try {
+          const input = args.prompt[Symbol.asyncIterator]();
+          const initial = await input.next();
+          const promptUuid = Reflect.get(
+            initial.value as object,
+            'uuid',
+          ) as string;
+          if (state.steering) await input.next();
 
-        for (const [index, frame] of state.frames.entries()) {
-          state.lastReadFrame = index;
-          yield JSON.parse(
-            JSON.stringify(frame).split('$PROMPT').join(promptUuid),
-          );
-        }
-        if (!args.options.abortSignal.aborted) {
-          await new Promise<void>(resolve => {
-            args.options.abortSignal.addEventListener(
-              'abort',
-              () => resolve(),
-              {
-                once: true,
-              },
+          for (const [index, frame] of state.frames.entries()) {
+            state.lastReadFrame = index;
+            yield JSON.parse(
+              JSON.stringify(frame).split('$PROMPT').join(promptUuid),
             );
-          });
+          }
+          if (!args.options.abortSignal.aborted) {
+            await new Promise<void>(resolve => {
+              args.options.abortSignal.addEventListener(
+                'abort',
+                () => resolve(),
+                {
+                  once: true,
+                },
+              );
+            });
+          }
+        } finally {
+          state.disposeQuery();
         }
-      } finally {
-        state.disposeQuery();
-      }
-    })(),
-}));
+      })(),
+  };
+});
 
 vi.mock('@modelcontextprotocol/sdk/server/mcp.js', () => ({
   McpServer: class {
